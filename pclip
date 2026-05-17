@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# pclip -- pipe text from SSH into the local Linux desktop clipboard
+# Usage:
+#   pclip                 (interactive: paste, then Ctrl+D)
+#   echo "text" | pclip   (piped)
+#   pclip -h | --help     (show help)
+#
+# Priority: wl-copy (Wayland) > xclip (X11) > xsel (X11 fallback)
+
+# --- help ----------------------------------------------------------------
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  cat <<'EOF'
+pclip — pipe text from an SSH session into the local Linux desktop clipboard.
+
+USAGE
+  pclip                  read from terminal (paste, then Ctrl+D)
+  cat file.txt | pclip   pipe in text
+  echo "hi" | pclip      pipe in text
+
+BACKENDS (tried in order)
+  wl-copy   (Wayland — preferred)
+  xclip -selection clipboard
+  xsel --clipboard --input
+
+If none are available, pclip prints install instructions.
+EOF
+  exit 0
+fi
+
+# --- auto-detect display environment (over SSH env vars may be absent) ---
+uid="$(id -u)"
+
+if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$uid" ]; then
+  export XDG_RUNTIME_DIR="/run/user/$uid"
+fi
+
+if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -S "${XDG_RUNTIME_DIR:-}/wayland-0" ]; then
+  export WAYLAND_DISPLAY="wayland-0"
+fi
+
+if [ -z "${DISPLAY:-}" ] && [ -S /tmp/.X11-unix/X0 ]; then
+  export DISPLAY=":0"
+fi
+
+if [ -z "${XAUTHORITY:-}" ] && [ -f "$HOME/.Xauthority" ]; then
+  export XAUTHORITY="$HOME/.Xauthority"
+fi
+
+# --- prompt for interactive use ------------------------------------------
+if [ -t 0 ]; then
+  echo "pclip: paste text now, then press Ctrl+D to copy it to the Linux clipboard." >&2
+fi
+
+# --- try Wayland ----------------------------------------------------------
+if command -v wl-copy >/dev/null 2>&1 &&
+   [ -n "${XDG_RUNTIME_DIR:-}" ] &&
+   [ -S "$XDG_RUNTIME_DIR/${WAYLAND_DISPLAY:-wayland-0}" ]; then
+  exec wl-copy
+fi
+
+# --- try X11 (xclip) -----------------------------------------------------
+if command -v xclip >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
+  exec xclip -selection clipboard
+fi
+
+# --- try X11 (xsel) ------------------------------------------------------
+if command -v xsel >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
+  exec xsel --clipboard --input
+fi
+
+# --- nothing available ---------------------------------------------------
+echo "pclip: no supported clipboard backend found." >&2
+echo "Install one of:  sudo apt install -y wl-clipboard xclip xsel" >&2
+exit 1
